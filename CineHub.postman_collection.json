@@ -1,0 +1,4701 @@
+{
+  "info": {
+    "_postman_id": "a5d6d92e-f7a2-49ef-a5be-a0df77355ea9",
+    "name": "CineHub API",
+    "description": "# CineHub : collection de tests\n\nTeste tous les endpoints du cahier des charges : authentification JWT, rôles user / admin, salles, films, séances, réservations, codes 401 / 403 / 404.\n\n## Démarrage rapide\n1. Importe `bdd.sql` dans MySQL et démarre l'API avec `npm start`.\n2. Onglet **Variables** de cette collection : vérifie `baseUrl` (par défaut `http://127.0.0.1:3000`, change le port si ton `.env` en utilise un autre).\n3. Clique sur la collection puis sur **Run** : les 87 requêtes s'enchaînent et tous les tests doivent passer au vert.\n\n## Comptes utilisés\n- **admin** : `admin` / `admin123` (créé par `bdd.sql`, variables `adminUsername` et `adminPassword`).\n- **user** : créé à chaque exécution par « Inscription (user) », avec un nom unique.\n\n## Comment ça marche\n- Les dossiers sont numérotés dans l'ordre d'exécution. Les scripts de l'onglet **Tests** remplissent automatiquement les variables (`tokenUser`, `tokenAdmin`, `roomId`, `filmId`, `screeningId`, `reservationId`...) utilisées par les requêtes suivantes.\n- La collection crée ses propres données (une salle de 3 places, un film, une séance dans 30 jours) puis les supprime dans le dossier 9 : tu peux la relancer autant de fois que tu veux, même si les séances du seed sont passées.\n- Pour tester une requête seule, lance d'abord le dossier 2 (tokens), puis les dossiers 4, 5 et 6 (données de test).\n- Un test global vérifie aussi que **chaque** réponse est au format JSON.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Santé de l'API",
+      "description": "Route publique : vérifie que le serveur répond.",
+      "item": [
+        {
+          "name": "Santé de l'API (public) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps { status: OK }\", function () {",
+                  "    pm.expect(pm.response.json().status).to.eql(\"OK\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                ""
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. Authentification",
+      "description": "Routes publiques (aucun token). Les deux connexions remplissent les variables tokenUser et tokenAdmin utilisées par tous les dossiers suivants.",
+      "item": [
+        {
+          "name": "Inscription (user) → 201",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Nom et e-mail uniques à chaque exécution : ces colonnes sont UNIQUE en base",
+                  "const suffix = Date.now();",
+                  "pm.collectionVariables.set(\"userUsername\", \"user_\" + suffix);",
+                  "pm.collectionVariables.set(\"userEmail\", \"user_\" + suffix + \"@mail.com\");",
+                  "pm.collectionVariables.set(\"userPassword\", \"secret123\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"Le rôle enregistré est « user »\", function () {",
+                  "    pm.expect(pm.response.json().user.us_role).to.eql(\"user\");",
+                  "});",
+                  "",
+                  "pm.test(\"Le mot de passe n'est jamais renvoyé\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.user).to.not.have.property(\"us_password\");",
+                  "    pm.expect(JSON.stringify(body)).to.not.include(pm.collectionVariables.get(\"userPassword\"));",
+                  "});",
+                  "",
+                  "if (pm.response.code === 201) {",
+                  "    pm.collectionVariables.set(\"userId\", pm.response.json().user.us_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{userUsername}}\",\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{userPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Crée un utilisateur avec un nom et un e-mail uniques (générés dans l'onglet Pre-request Script). Le rôle enregistré est forcément « user »."
+          },
+          "response": []
+        },
+        {
+          "name": "Inscription — rôle admin demandé → 201 (rôle user)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const suffix = Date.now();",
+                  "pm.collectionVariables.set(\"pirateUsername\", \"pirate_\" + suffix);",
+                  "pm.collectionVariables.set(\"pirateEmail\", \"pirate_\" + suffix + \"@mail.com\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"Le rôle « admin » demandé est ignoré : le rôle reste « user »\", function () {",
+                  "    pm.expect(pm.response.json().user.us_role).to.eql(\"user\");",
+                  "});",
+                  "",
+                  "if (pm.response.code === 201) {",
+                  "    pm.collectionVariables.set(\"pirateId\", pm.response.json().user.us_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{pirateUsername}}\",\n  \"email\": \"{{pirateEmail}}\",\n  \"password\": \"secret123\",\n  \"role\": \"admin\",\n  \"us_role\": \"admin\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Un utilisateur ne peut pas s'auto-promouvoir admin : le champ « role » du body doit être ignoré."
+          },
+          "response": []
+        },
+        {
+          "name": "Inscription — champs manquants → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"seulement_un_nom\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Inscription — nom d'utilisateur déjà pris → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{userUsername}}\",\n  \"email\": \"autre_{{userEmail}}\",\n  \"password\": \"secret123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Contrainte UNIQUE sur us_username."
+          },
+          "response": []
+        },
+        {
+          "name": "Connexion user → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Réponse { message, token }\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.message).to.be.a(\"string\");",
+                  "    pm.expect(body.token).to.be.a(\"string\");",
+                  "});",
+                  "",
+                  "pm.test(\"Le token a la forme d'un JWT (3 parties)\", function () {",
+                  "    pm.expect(pm.response.json().token.split(\".\")).to.have.lengthOf(3);",
+                  "});",
+                  "",
+                  "if (pm.response.code === 200) {",
+                  "    pm.collectionVariables.set(\"tokenUser\", pm.response.json().token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{userUsername}}\",\n  \"password\": \"{{userPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Renvoie un JWT valable 1 heure, enregistré dans la variable tokenUser."
+          },
+          "response": []
+        },
+        {
+          "name": "Connexion admin → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Réponse { message, token }\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.message).to.be.a(\"string\");",
+                  "    pm.expect(body.token).to.be.a(\"string\");",
+                  "});",
+                  "",
+                  "if (pm.response.code === 200) {",
+                  "    pm.collectionVariables.set(\"tokenAdmin\", pm.response.json().token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{adminUsername}}\",\n  \"password\": \"{{adminPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Compte admin créé par bdd.sql (variables adminUsername / adminPassword). Si ça échoue : bdd.sql est-il bien importé ?"
+          },
+          "response": []
+        },
+        {
+          "name": "Connexion — mauvais mot de passe → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Message « Identifiants incorrects » et aucun token\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.error).to.eql(\"Identifiants incorrects\");",
+                  "    pm.expect(body).to.not.have.property(\"token\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{userUsername}}\",\n  \"password\": \"mauvais_mot_de_passe\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Connexion — champs manquants → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{userUsername}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Utilisateurs",
+      "description": "Profil, modification et liste des utilisateurs (la suppression est dans le dossier 9).",
+      "item": [
+        {
+          "name": "Mon profil (user) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Profil de l'utilisateur connecté, sans mot de passe\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.us_username).to.eql(pm.collectionVariables.get(\"userUsername\"));",
+                  "    pm.expect(body.us_role).to.eql(\"user\");",
+                  "    pm.expect(body).to.not.have.property(\"us_password\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "me"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Mon profil (admin) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Le compte admin a le rôle « admin »\", function () {",
+                  "    pm.expect(pm.response.json().us_role).to.eql(\"admin\");",
+                  "});",
+                  "",
+                  "if (pm.response.code === 200) {",
+                  "    pm.collectionVariables.set(\"adminId\", pm.response.json().us_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "me"
+              ]
+            },
+            "description": "Enregistre l'id de l'admin dans la variable adminId."
+          },
+          "response": []
+        },
+        {
+          "name": "Détail d'un utilisateur (user) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Détail renvoyé sans mot de passe\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.us_id).to.eql(Number(pm.collectionVariables.get(\"adminId\")));",
+                  "    pm.expect(body).to.not.have.property(\"us_password\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{adminId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{adminId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Utilisateur inconnu → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 404\", function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/999999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "999999"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Modifier son profil (user) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"E-mail modifié, nom d'utilisateur inchangé\", function () {",
+                  "    const user = pm.response.json().user;",
+                  "    pm.expect(user.us_email).to.eql(\"maj_\" + pm.collectionVariables.get(\"userEmail\"));",
+                  "    pm.expect(user.us_username).to.eql(pm.collectionVariables.get(\"userUsername\"));",
+                  "    pm.expect(user).to.not.have.property(\"us_password\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"maj_{{userEmail}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/{{userId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{userId}}"
+              ]
+            },
+            "description": "Modification partielle : seul l'e-mail change, le nom d'utilisateur reste le même."
+          },
+          "response": []
+        },
+        {
+          "name": "Modifier le profil d'un autre (user) → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"pirate\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/{{adminId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{adminId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Liste des utilisateurs (user) → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Accès réservé aux administrateurs\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Accès réservé aux administrateurs\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Liste des utilisateurs (admin) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Tableau contenant l'utilisateur de test, sans aucun mot de passe\", function () {",
+                  "    const list = pm.response.json();",
+                  "    pm.expect(list).to.be.an(\"array\");",
+                  "    pm.expect(list.some((u) => u.us_id === Number(pm.collectionVariables.get(\"userId\")))).to.be.true;",
+                  "    pm.expect(list.every((u) => !(\"us_password\" in u))).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Supprimer un utilisateur (user) → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Accès réservé aux administrateurs\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Accès réservé aux administrateurs\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{pirateId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{pirateId}}"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. Salles (rooms)",
+      "description": "CRUD des salles. La salle de test n'a que 3 places : elle sert à tester la limite de réservation (dossier 7). Sa suppression est dans le dossier 9.",
+      "item": [
+        {
+          "name": "Créer une salle (admin) → 201",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"roomName\", \"Salle Postman \" + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"Salle créée avec 3 places\", function () {",
+                  "    const room = pm.response.json().room;",
+                  "    pm.expect(room.ro_name).to.eql(pm.collectionVariables.get(\"roomName\"));",
+                  "    pm.expect(room.ro_capacity).to.eql(3);",
+                  "});",
+                  "",
+                  "if (pm.response.code === 201) {",
+                  "    pm.collectionVariables.set(\"roomId\", pm.response.json().room.ro_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{roomName}}\",\n  \"capacity\": 3\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/rooms",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rooms"
+              ]
+            },
+            "description": "Salle de 3 places seulement, avec un nom unique généré par le script (ro_name est UNIQUE)."
+          },
+          "response": []
+        },
+        {
+          "name": "Créer une salle — champs manquants → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Salle sans capacité\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/rooms",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rooms"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Créer une salle — nom déjà pris → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{roomName}}\",\n  \"capacity\": 50\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/rooms",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rooms"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Liste des salles (user) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Tableau contenant la salle de test\", function () {",
+                  "    const list = pm.response.json();",
+                  "    pm.expect(list).to.be.an(\"array\");",
+                  "    pm.expect(list.some((r) => r.ro_id === Number(pm.collectionVariables.get(\"roomId\")))).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/rooms",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rooms"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Détail d'une salle (user) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Salle renvoyée\", function () {",
+                  "    const room = pm.response.json();",
+                  "    pm.expect(room.ro_id).to.eql(Number(pm.collectionVariables.get(\"roomId\")));",
+                  "    pm.expect(room.ro_capacity).to.eql(3);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/rooms/{{roomId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rooms",
+                "{{roomId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Salle inconnue → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 404\", function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/rooms/999999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rooms",
+                "999999"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Modifier une salle (admin) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Nom modifié, capacité inchangée\", function () {",
+                  "    const room = pm.response.json().room;",
+                  "    pm.expect(room.ro_name).to.eql(pm.collectionVariables.get(\"roomName\") + \" (rénovée)\");",
+                  "    pm.expect(room.ro_capacity).to.eql(3);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{roomName}} (rénovée)\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/rooms/{{roomId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rooms",
+                "{{roomId}}"
+              ]
+            },
+            "description": "Modification partielle : seul le nom change, la capacité reste à 3."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5. Films",
+      "description": "CRUD des films. Lecture : tout utilisateur connecté. Écriture : admin. La suppression est dans le dossier 9.",
+      "item": [
+        {
+          "name": "Créer un film (admin) → 201",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"Film créé avec les bonnes valeurs\", function () {",
+                  "    const film = pm.response.json().film;",
+                  "    pm.expect(film.fi_title).to.eql(\"Film Postman\");",
+                  "    pm.expect(film.fi_duration).to.eql(120);",
+                  "    pm.expect(Number(film.fi_is_showing)).to.eql(1);",
+                  "});",
+                  "",
+                  "if (pm.response.code === 201) {",
+                  "    pm.collectionVariables.set(\"filmId\", pm.response.json().film.fi_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Film Postman\",\n  \"description\": \"Film créé par la collection Postman.\",\n  \"duration\": 120,\n  \"genre\": \"Test\",\n  \"release_date\": \"2024-01-15\",\n  \"is_showing\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/films",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "films"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Créer un film — champs manquants → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Ni titre ni durée\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/films",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "films"
+              ]
+            },
+            "description": "title et duration sont obligatoires."
+          },
+          "response": []
+        },
+        {
+          "name": "Liste des films (user) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Tableau contenant le film de test\", function () {",
+                  "    const list = pm.response.json();",
+                  "    pm.expect(list).to.be.an(\"array\");",
+                  "    pm.expect(list.some((f) => f.fi_id === Number(pm.collectionVariables.get(\"filmId\")))).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/films",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "films"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Films à l'affiche (user) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Tous les films renvoyés sont à l'affiche, dont le film de test\", function () {",
+                  "    const list = pm.response.json();",
+                  "    pm.expect(list).to.be.an(\"array\");",
+                  "    pm.expect(list.every((f) => Number(f.fi_is_showing) === 1)).to.be.true;",
+                  "    pm.expect(list.some((f) => f.fi_id === Number(pm.collectionVariables.get(\"filmId\")))).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/films/showing",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "films",
+                "showing"
+              ]
+            },
+            "description": "Uniquement les films avec fi_is_showing = 1."
+          },
+          "response": []
+        },
+        {
+          "name": "Détail d'un film + séances à venir (user) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Film renvoyé avec un tableau « screenings »\", function () {",
+                  "    const film = pm.response.json();",
+                  "    pm.expect(film.fi_id).to.eql(Number(pm.collectionVariables.get(\"filmId\")));",
+                  "    pm.expect(film.fi_title).to.eql(\"Film Postman\");",
+                  "    pm.expect(film.screenings).to.be.an(\"array\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/films/{{filmId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "films",
+                "{{filmId}}"
+              ]
+            },
+            "description": "Renvoie le film et son tableau « screenings » (vide tant qu'aucune séance n'existe : voir le dossier 6)."
+          },
+          "response": []
+        },
+        {
+          "name": "Film inconnu → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 404\", function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/films/999999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "films",
+                "999999"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Modifier un film (admin) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Message de confirmation et film mis à jour\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.message).to.be.a(\"string\");",
+                  "    pm.expect(body.film.fi_genre).to.eql(\"Drame\");",
+                  "    pm.expect(body.film.fi_duration).to.eql(125);",
+                  "});",
+                  "",
+                  "pm.test(\"Les champs non envoyés restent inchangés\", function () {",
+                  "    pm.expect(pm.response.json().film.fi_title).to.eql(\"Film Postman\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"genre\": \"Drame\",\n  \"duration\": 125\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/films/{{filmId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "films",
+                "{{filmId}}"
+              ]
+            },
+            "description": "Modification partielle : seuls genre et duration changent."
+          },
+          "response": []
+        },
+        {
+          "name": "Modifier un film inconnu → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 404\", function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"genre\": \"Drame\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/films/999999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "films",
+                "999999"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "6. Séances (screenings)",
+      "description": "CRUD des séances. La séance de test est créée dans 30 jours (toujours « à venir »), pour le film et la salle créés dans les dossiers 4 et 5. Sa suppression est dans le dossier 9.",
+      "item": [
+        {
+          "name": "Créer une séance (admin) → 201",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Séance dans 30 jours à 20h30 : toujours « à venir », quelle que soit la date du jour",
+                  "const d = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);",
+                  "const pad = (n) => String(n).padStart(2, \"0\");",
+                  "pm.collectionVariables.set(",
+                  "    \"screeningDate\",",
+                  "    d.getFullYear() + \"-\" + pad(d.getMonth() + 1) + \"-\" + pad(d.getDate()) + \" 20:30:00\"",
+                  ");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"Séance créée avec le bon film, la bonne salle et le bon prix\", function () {",
+                  "    const s = pm.response.json().screening;",
+                  "    pm.expect(s.fi_title).to.eql(\"Film Postman\");",
+                  "    pm.expect(s.ro_name).to.be.a(\"string\");",
+                  "    pm.expect(Number(s.sc_price)).to.eql(9.5);",
+                  "});",
+                  "",
+                  "if (pm.response.code === 201) {",
+                  "    pm.collectionVariables.set(\"screeningId\", pm.response.json().screening.sc_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"film\": {{filmId}},\n  \"room\": {{roomId}},\n  \"datetime\": \"{{screeningDate}}\",\n  \"price\": 9.5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/screenings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "screenings"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Créer une séance — champs manquants → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"film\": {{filmId}},\n  \"room\": {{roomId}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/screenings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "screenings"
+              ]
+            },
+            "description": "film, room, datetime et price sont obligatoires."
+          },
+          "response": []
+        },
+        {
+          "name": "Créer une séance — film inexistant → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 404\", function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"film\": 999999,\n  \"room\": {{roomId}},\n  \"datetime\": \"{{screeningDate}}\",\n  \"price\": 9.5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/screenings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "screenings"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Liste des séances (user) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Tableau avec titre du film et nom de la salle, dont la séance de test\", function () {",
+                  "    const list = pm.response.json();",
+                  "    pm.expect(list).to.be.an(\"array\");",
+                  "    pm.expect(list.every((s) => s.fi_title && s.ro_name)).to.be.true;",
+                  "    pm.expect(list.some((s) => s.sc_id === Number(pm.collectionVariables.get(\"screeningId\")))).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/screenings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "screenings"
+              ]
+            },
+            "description": "Chaque séance contient le titre du film et le nom de la salle."
+          },
+          "response": []
+        },
+        {
+          "name": "Séances d'un film (user) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Une seule séance : celle du film de test\", function () {",
+                  "    const list = pm.response.json();",
+                  "    pm.expect(list).to.have.lengthOf(1);",
+                  "    pm.expect(list[0].sc_id).to.eql(Number(pm.collectionVariables.get(\"screeningId\")));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/screenings/film/{{filmId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "screenings",
+                "film",
+                "{{filmId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Détail d'une séance (user) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Séance renvoyée avec son film et sa salle de 3 places\", function () {",
+                  "    const s = pm.response.json();",
+                  "    pm.expect(s.sc_id).to.eql(Number(pm.collectionVariables.get(\"screeningId\")));",
+                  "    pm.expect(s.fi_title).to.eql(\"Film Postman\");",
+                  "    pm.expect(s.ro_capacity).to.eql(3);",
+                  "    pm.expect(s.sc_datetime.slice(0, 10)).to.eql(pm.collectionVariables.get(\"screeningDate\").slice(0, 10));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/screenings/{{screeningId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "screenings",
+                "{{screeningId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Séance inconnue → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 404\", function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/screenings/999999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "screenings",
+                "999999"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Modifier une séance (admin) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Prix modifié, film inchangé\", function () {",
+                  "    const s = pm.response.json().screening;",
+                  "    pm.expect(Number(s.sc_price)).to.eql(11);",
+                  "    pm.expect(s.fi_title).to.eql(\"Film Postman\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"price\": 11\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/screenings/{{screeningId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "screenings",
+                "{{screeningId}}"
+              ]
+            },
+            "description": "Modification partielle : seul le prix change."
+          },
+          "response": []
+        },
+        {
+          "name": "Détail du film : sa séance à venir apparaît → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Le film liste sa séance à venir avec le nom de la salle\", function () {",
+                  "    const film = pm.response.json();",
+                  "    pm.expect(film.screenings).to.have.lengthOf(1);",
+                  "    pm.expect(film.screenings[0].sc_id).to.eql(Number(pm.collectionVariables.get(\"screeningId\")));",
+                  "    pm.expect(film.screenings[0].ro_name).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/films/{{filmId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "films",
+                "{{filmId}}"
+              ]
+            },
+            "description": "Même requête que dans le dossier 5, mais la séance existe maintenant : elle doit apparaître avec le nom de la salle (jointure)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "7. Réservations",
+      "description": "Réservation, consultation et annulation. La salle de test n'a que 3 places : le user en prend 2, l'admin la dernière, puis on teste les refus et les annulations.",
+      "item": [
+        {
+          "name": "Réserver — plus de places que la salle (user) → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Plus assez de places disponibles\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Plus assez de places disponibles\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"screening\": {{screeningId}},\n  \"seats\": 4\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations"
+              ]
+            },
+            "description": "4 places demandées pour une salle de 3."
+          },
+          "response": []
+        },
+        {
+          "name": "Réserver — screening manquant → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"seats\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Réserver — seats invalide → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"screening\": {{screeningId}},\n  \"seats\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations"
+              ]
+            },
+            "description": "seats doit être un entier supérieur ou égal à 1."
+          },
+          "response": []
+        },
+        {
+          "name": "Réserver — séance inconnue → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 404\", function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"screening\": 999999,\n  \"seats\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Réserver 2 places (user) → 201",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"2 places réservées au nom de l'utilisateur connecté\", function () {",
+                  "    const r = pm.response.json().reservation;",
+                  "    pm.expect(r.re_seats).to.eql(2);",
+                  "    pm.expect(r.re_user).to.eql(Number(pm.collectionVariables.get(\"userId\")));",
+                  "});",
+                  "",
+                  "if (pm.response.code === 201) {",
+                  "    pm.collectionVariables.set(\"reservationId\", pm.response.json().reservation.re_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"screening\": {{screeningId}},\n  \"seats\": 2\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Réserver la même séance 2 fois → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"screening\": {{screeningId}},\n  \"seats\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations"
+              ]
+            },
+            "description": "Un utilisateur ne peut réserver qu'une fois la même séance (UNIQUE re_user + re_screening)."
+          },
+          "response": []
+        },
+        {
+          "name": "Réserver — il ne reste qu'1 place (admin) → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Plus assez de places disponibles\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Plus assez de places disponibles\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"screening\": {{screeningId}},\n  \"seats\": 2\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations"
+              ]
+            },
+            "description": "2 places déjà prises + 2 demandées = 4 sur 3 : le calcul tient compte des réservations des autres utilisateurs."
+          },
+          "response": []
+        },
+        {
+          "name": "Réserver la dernière place (admin) → 201",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"La réservation est au nom de l'admin (token), pas du « user » du body\", function () {",
+                  "    pm.expect(pm.response.json().reservation.re_user).to.eql(Number(pm.collectionVariables.get(\"adminId\")));",
+                  "});",
+                  "",
+                  "if (pm.response.code === 201) {",
+                  "    pm.collectionVariables.set(\"adminReservationId\", pm.response.json().reservation.re_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"screening\": {{screeningId}},\n  \"seats\": 1,\n  \"user\": {{userId}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations"
+              ]
+            },
+            "description": "Le body contient un champ « user » (l'id du user de test) : il doit être ignoré, l'utilisateur vient toujours du token. La salle est maintenant pleine (3 sur 3)."
+          },
+          "response": []
+        },
+        {
+          "name": "Mes réservations (user) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Une seule réservation (la sienne), avec toutes les informations demandées\", function () {",
+                  "    const list = pm.response.json();",
+                  "    pm.expect(list).to.have.lengthOf(1);",
+                  "    [\"re_id\", \"re_seats\", \"fi_title\", \"sc_datetime\", \"ro_name\", \"sc_price\"].forEach(function (key) {",
+                  "        pm.expect(list[0]).to.have.property(key);",
+                  "    });",
+                  "    pm.expect(list[0].re_id).to.eql(Number(pm.collectionVariables.get(\"reservationId\")));",
+                  "    pm.expect(list[0].re_seats).to.eql(2);",
+                  "    pm.expect(list[0].fi_title).to.eql(\"Film Postman\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reservations/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations",
+                "me"
+              ]
+            },
+            "description": "Pour chaque réservation : id, nombre de places, titre du film, date/heure, salle et prix. L'admin a aussi réservé cette séance, mais l'utilisateur ne voit que la sienne."
+          },
+          "response": []
+        },
+        {
+          "name": "Toutes les réservations (user) → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Accès réservé aux administrateurs\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Accès réservé aux administrateurs\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Toutes les réservations (admin) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Tableau contenant les 2 réservations de test\", function () {",
+                  "    const list = pm.response.json();",
+                  "    pm.expect(list).to.be.an(\"array\");",
+                  "    const ids = list.map((r) => r.re_id);",
+                  "    pm.expect(ids).to.include(Number(pm.collectionVariables.get(\"reservationId\")));",
+                  "    pm.expect(ids).to.include(Number(pm.collectionVariables.get(\"adminReservationId\")));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Réservations d'une séance (user) → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Accès réservé aux administrateurs\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Accès réservé aux administrateurs\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reservations/screening/{{screeningId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations",
+                "screening",
+                "{{screeningId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Réservations d'une séance (admin) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"2 réservations, 3 places au total (salle pleine)\", function () {",
+                  "    const list = pm.response.json();",
+                  "    pm.expect(list).to.have.lengthOf(2);",
+                  "    pm.expect(list.reduce((sum, r) => sum + r.re_seats, 0)).to.eql(3);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reservations/screening/{{screeningId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations",
+                "screening",
+                "{{screeningId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Annuler la réservation d'un autre (user) → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reservations/{{adminReservationId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations",
+                "{{adminReservationId}}"
+              ]
+            },
+            "description": "Un utilisateur ne peut annuler que ses propres réservations."
+          },
+          "response": []
+        },
+        {
+          "name": "Annuler sa réservation (user) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Message de confirmation\", function () {",
+                  "    pm.expect(pm.response.json().message).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reservations/{{reservationId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations",
+                "{{reservationId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Annuler une réservation déjà annulée → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 404\", function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reservations/{{reservationId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations",
+                "{{reservationId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Réserver à nouveau après l'annulation (user) → 201",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"1 place réservée au nom de l'utilisateur connecté\", function () {",
+                  "    const r = pm.response.json().reservation;",
+                  "    pm.expect(r.re_seats).to.eql(1);",
+                  "    pm.expect(r.re_user).to.eql(Number(pm.collectionVariables.get(\"userId\")));",
+                  "});",
+                  "",
+                  "if (pm.response.code === 201) {",
+                  "    pm.collectionVariables.set(\"reservationId\", pm.response.json().reservation.re_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"screening\": {{screeningId}},\n  \"seats\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations"
+              ]
+            },
+            "description": "Les places libérées sont de nouveau disponibles, et la contrainte « une réservation par séance » ne bloque plus."
+          },
+          "response": []
+        },
+        {
+          "name": "Annuler la réservation d'un utilisateur (admin) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Message de confirmation\", function () {",
+                  "    pm.expect(pm.response.json().message).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reservations/{{reservationId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations",
+                "{{reservationId}}"
+              ]
+            },
+            "description": "Un admin peut annuler n'importe quelle réservation."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "8. Sécurité (401 / 403)",
+      "description": "Sans token : 401. Token invalide : 403. Utilisateur simple sur une route réservée aux admins : 403.",
+      "item": [
+        {
+          "name": "Films — sans token → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 401\", function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Unauthorized\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Unauthorized\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/films",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "films"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Salles — sans token → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 401\", function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Unauthorized\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Unauthorized\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/rooms",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rooms"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Séances — sans token → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 401\", function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Unauthorized\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Unauthorized\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/screenings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "screenings"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Mes réservations — sans token → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 401\", function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Unauthorized\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Unauthorized\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reservations/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations",
+                "me"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Mon profil — sans token → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 401\", function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Unauthorized\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Unauthorized\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "me"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Créer un film — sans token → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 401\", function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Unauthorized\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Unauthorized\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Sans token\",\n  \"duration\": 90\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/films",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "films"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Films — token invalide → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Token incorrect\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Token incorrect\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenInvalide}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/films",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "films"
+              ]
+            },
+            "description": "Le token envoyé n'est pas un vrai JWT (variable tokenInvalide, définie dans la collection)."
+          },
+          "response": []
+        },
+        {
+          "name": "Créer un film (user) → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Accès réservé aux administrateurs\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Accès réservé aux administrateurs\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Interdit\",\n  \"duration\": 90\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/films",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "films"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Modifier un film (user) → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Accès réservé aux administrateurs\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Accès réservé aux administrateurs\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"genre\": \"Interdit\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/films/{{filmId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "films",
+                "{{filmId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Supprimer un film (user) → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Accès réservé aux administrateurs\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Accès réservé aux administrateurs\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/films/{{filmId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "films",
+                "{{filmId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Créer une salle (user) → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Accès réservé aux administrateurs\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Accès réservé aux administrateurs\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Salle interdite\",\n  \"capacity\": 10\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/rooms",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rooms"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Supprimer une salle (user) → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Accès réservé aux administrateurs\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Accès réservé aux administrateurs\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/rooms/{{roomId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rooms",
+                "{{roomId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Créer une séance (user) → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Accès réservé aux administrateurs\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Accès réservé aux administrateurs\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"film\": {{filmId}},\n  \"room\": {{roomId}},\n  \"datetime\": \"{{screeningDate}}\",\n  \"price\": 9.5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/screenings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "screenings"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Supprimer une séance (user) → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 403\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"Message d'erreur : Accès réservé aux administrateurs\", function () {",
+                  "    pm.expect(pm.response.json().error).to.eql(\"Accès réservé aux administrateurs\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/screenings/{{screeningId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "screenings",
+                "{{screeningId}}"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "9. Nettoyage (suppressions admin)",
+      "description": "Supprime tout ce que la collection a créé : c'est aussi le test des DELETE admin. Supprimer un film, une salle, une séance ou un utilisateur supprime aussi ce qui s'y rattache (séances, réservations) : c'est l'API qui s'en charge, que la base ait ou non ON DELETE CASCADE.",
+      "item": [
+        {
+          "name": "Supprimer la séance (admin) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Message de confirmation\", function () {",
+                  "    pm.expect(pm.response.json().message).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/screenings/{{screeningId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "screenings",
+                "{{screeningId}}"
+              ]
+            },
+            "description": "Supprime aussi la réservation restante de l'admin (cascade)."
+          },
+          "response": []
+        },
+        {
+          "name": "Séance déjà supprimée → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 404\", function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/screenings/{{screeningId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "screenings",
+                "{{screeningId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Cascade : la réservation de la séance a disparu → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"La réservation de l'admin a été supprimée avec la séance\", function () {",
+                  "    const ids = pm.response.json().map((r) => r.re_id);",
+                  "    pm.expect(ids).to.not.include(Number(pm.collectionVariables.get(\"adminReservationId\")));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Recréer une séance sur le film (admin) → 201",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "if (pm.response.code === 201) {",
+                  "    pm.collectionVariables.set(\"screeningId\", pm.response.json().screening.sc_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"film\": {{filmId}},\n  \"room\": {{roomId}},\n  \"datetime\": \"{{screeningDate}}\",\n  \"price\": 9.5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/screenings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "screenings"
+              ]
+            },
+            "description": "Prépare la suppression du film : il aura de nouveau une séance, et cette séance une réservation."
+          },
+          "response": []
+        },
+        {
+          "name": "Réserver cette séance (user) → 201",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "if (pm.response.code === 201) {",
+                  "    pm.collectionVariables.set(\"reservationId\", pm.response.json().reservation.re_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"screening\": {{screeningId}},\n  \"seats\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Supprimer le film (admin) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Message de confirmation\", function () {",
+                  "    pm.expect(pm.response.json().message).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/films/{{filmId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "films",
+                "{{filmId}}"
+              ]
+            },
+            "description": "Le film a encore une séance, et cette séance une réservation : l'API les supprime avec le film."
+          },
+          "response": []
+        },
+        {
+          "name": "Cascade : la séance du film a disparu → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 404\", function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/screenings/{{screeningId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "screenings",
+                "{{screeningId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Cascade : la réservation du film a disparu → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"La réservation de la séance supprimée n'apparaît plus\", function () {",
+                  "    const ids = pm.response.json().map((r) => r.re_id);",
+                  "    pm.expect(ids).to.not.include(Number(pm.collectionVariables.get(\"reservationId\")));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reservations/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reservations",
+                "me"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Film supprimé → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 404\", function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenUser}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/films/{{filmId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "films",
+                "{{filmId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Supprimer la salle (admin) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Message de confirmation\", function () {",
+                  "    pm.expect(pm.response.json().message).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/rooms/{{roomId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rooms",
+                "{{roomId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Supprimer l'utilisateur de test (admin) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Message de confirmation\", function () {",
+                  "    pm.expect(pm.response.json().message).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{userId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{userId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Supprimer l'utilisateur « pirate » (admin) → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{pirateId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{pirateId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Utilisateur supprimé → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Statut 404\", function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test(\"Corps JSON { error: ... }\", function () {",
+                  "    pm.expect(pm.response.json().error).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{userId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{userId}}"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Exécuté après CHAQUE requête : le cahier des charges impose de toujours répondre en JSON",
+          "pm.test(\"Réponse au format JSON\", function () {",
+          "    pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:3000",
+      "type": "string"
+    },
+    {
+      "key": "adminUsername",
+      "value": "admin",
+      "type": "string"
+    },
+    {
+      "key": "adminPassword",
+      "value": "admin123",
+      "type": "string"
+    },
+    {
+      "key": "tokenInvalide",
+      "value": "ceci.nest.pas.un.jwt",
+      "type": "string"
+    },
+    {
+      "key": "userUsername",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "userEmail",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "userPassword",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "userId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "pirateUsername",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "pirateEmail",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "pirateId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "adminId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "tokenUser",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "tokenAdmin",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "roomName",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "roomId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "filmId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "screeningDate",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "screeningId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "reservationId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "adminReservationId",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}
